@@ -69,4 +69,8 @@ describe('strategic reflection boundary', () => {
     const result = reflectStrategy({ successful: false, duplicate: false, attempts: 3, maxAttempts: 3, boundary: { scope: [], approvedTools: [], approvalsRequired: true, receiptsRequired: true, evidenceRequired: true, remainingIterations: 0, remainingTokens: 0 } });
     expect(result).toMatchObject({ assessment: 'retry-exhausted', mayExecute: false, requiresApproval: false });
   });
+  it('treats a findings debrief block as content, not a tool request', () => {
+    const text = 'Done.\n```json\n{"findings":[{"title":"SQL injection","verdict":"confirmed"}],"abstained":false}\n```';
+    expect(enforceToolCallBoundary(text, [{ name: 'read_file', description: '', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } }])).toEqual({ attempted: false });
+  });
 });

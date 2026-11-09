@@ -86,7 +86,7 @@ function secretFinding(file: string, line: number, ruleId: string, label: string
     cwe: ['CWE-798'],
     location: { file, line },
     evidence: `${file}:${line} matches rule "${ruleId}" (value ${maskSecret(value)}, redacted)`,
-    description: `A ${label.toLowerCase()} is hardcoded in source control. Anyone with read access to the repository, its forks or its history can use it.${test ? ' The file looks like a test or fixture; confirm whether the value is real.' : ''}`,
+    description: `A credential (${label}) is hardcoded in source control. Anyone with read access to the repository, its forks or its history can use it.${test ? ' The file looks like a test or fixture; confirm whether the value is real.' : ''}`,
     remediation: REMEDIATION,
     retest: `Re-scan the repository: no secret is reported at ${file}:${line}, and the old credential is rejected by the provider.`,
     source,

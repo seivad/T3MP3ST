@@ -58,7 +58,18 @@ export function enforceToolCallBoundary(text: string, tools: readonly LLMToolDef
   const fenced = [...text.matchAll(/```(?:json|tool)?\s*([\s\S]*?)```/g)].map((match) => match[1]);
   const attempted = fenced.length > 0 || /"(?:tool_calls|name)"\s*:/.test(text);
   if (!attempted) return { attempted: false };
-  const candidates = fenced.length ? fenced : [text.trim()];
+  // A fenced block that parses to an object with neither `tool_calls` nor `name` (an operator's
+  // findings debrief, a requested JSON answer) is content, not a tool request.
+  const toolShaped = (candidate: string): boolean => {
+    try {
+      const value = parseCandidate(candidate);
+      return Array.isArray(value) || (!!value && typeof value === 'object' && ('tool_calls' in value || 'name' in value));
+    } catch {
+      return true;
+    }
+  };
+  const candidates = (fenced.length ? fenced : [text.trim()]).filter(toolShaped);
+  if (candidates.length === 0) return { attempted: false };
   const errors: string[] = [];
   for (const candidate of candidates) {
     let value: unknown;
