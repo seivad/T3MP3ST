@@ -32,7 +32,7 @@ import {
   type IngestResult,
   type AnalysisUnit,
 } from '../recon/code-ingest.js';
-import { estimateTokens } from '../orchestration/context-pack.js';
+import { estimateTokens } from '../recon/context-pack.js';
 
 // ---------------------------------------------------------------------------
 // Temp repo fixture

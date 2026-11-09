@@ -43,7 +43,7 @@ describe('tool-call repair boundary', () => {
 
   it('is wired inside text adapters so boundary errors enter the bounded retry loop', () => {
     const source = readFileSync(new URL('../llm/index.ts', import.meta.url), 'utf8');
-    expect(source.match(/enforceToolCallBoundary\([^;]+/g)?.length).toBe(3);
+    expect(source.match(/enforceToolCallBoundary\([^;]+/g)?.length).toBe(1);
     expect(source).toContain('for (let attempt = 1; attempt <= this.retryAttempts; attempt++)');
     expect(source).toContain("this.emit('request:retry'");
   });

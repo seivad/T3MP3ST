@@ -1,61 +1,30 @@
 /**
- * whitebox — glue that wires the large-repo analysis pipeline end to end:
+ * whitebox — the repository side of the defensive assessment: resolve a repo the operator
+ * supplied (a contained local path, or an HTTPS GitHub URL cloned with a one-shot token), then
+ * ingest it and pack a security-ordered source view for the Analyst operator.
  *
- *     code-ingest (SELECT)  ->  context-pack (BUDGET)  ->  DecompositionOrchestrator (REASON)
+ *     code-ingest (SELECT)  ->  context-pack (BUDGET)
  *
- * This is the WHITE-BOX path: it reads LOCAL source you own off disk (no network
- * target, no probing). The only outbound calls are the LLM calls the orchestrator
- * itself makes (worker + orchestrator models). It is otherwise pure of network
- * side effects.
+ * It reads source off disk only. It never probes a network target.
  *
- * SCOPE CAVEAT (inherited from code-ingest): the ingest layer extracts blocks via
- * web-tree-sitter for Python/JS/TS/Go/Java/C/C++ (Python uses the regex "AST-lite"
- * path; other languages fail-open to [] — never the Python regex — on a grammar
- * miss or parse error) — see recon/code-ingest.ts + recon/ts-parse.ts. It selects which
- * blocks to analyze first by security exposure; a language without a bundled grammar,
- * or code imported from outside the scan scope, is invisible. Do NOT describe this as
- * "any repo" or "any language".
+ * SCOPE CAVEAT (inherited from code-ingest): blocks are extracted via web-tree-sitter for
+ * Python/JS/TS/Go/Java/C/C++; a language without a bundled grammar is invisible to ranking
+ * (the defensive scanners still pattern-match it). Do NOT describe this as "any language".
  *
- * KNOWN EXTRACTION LIMITS (fail-safe — these shapes are silently NOT extracted or
- * under-linked, never mis-extracted; all strictly better than the prior Python-only
- * ingest, and tracked as follow-ups):
- *   - JS/TS: declarations plus name-bound function values (`const f = () => …`,
- *     `obj.f = …`, `{ f: … }`, class-field arrows incl. `#private`) are captured.
- *     Definitions with no name-to-function binding are not: HOC-wrapped values
- *     (`const h = withAuth(fn)`) and anonymous callbacks
- *     (`app.get('/x', (req, res) => …)`).
- *   - C++: only free functions are captured. In-class and out-of-line (`Class::method`)
- *     member methods are not — a materially narrower C++ story than "full support".
- *   - Entry-point elevation for non-Python code relies on name heuristics only; no
- *     language emits `decorators`, so annotation-based routes (Spring `@GetMapping`,
- *     TS `@Get()`, Express `app.get(...)`) are not elevated to `exposed_externally`.
- *   - Call-graph/reachability: buildCallGraph strips a block's signature line before
- *     scanning for callees (kept unchanged for Python-benchmark stability), so a
- *     SINGLE-LINE non-Python definition (`func F(u) { return G(u) }`) misses the call
- *     on that line — the block is still extracted and sink-classified, only the edge
- *     is lost.
+ * The upstream DecompositionOrchestrator (a planner that split an objective into questions
+ * stripped of security context so a worker model would not decline them) is not part of the
+ * defensive build.
  */
 
-import { config } from '../config/index.js';
 import {
   ingestRepository,
   createMultiLangIngestConfig,
   packAnalysisUnits,
 } from './code-ingest.js';
-import { DecompositionOrchestrator } from '../orchestration/index.js';
-import type { DecompositionConfig } from '../orchestration/index.js';
-import type { LLMProvider } from '../types/index.js';
 import { mkdtempSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, tmpdir } from 'node:os';
 import { join as joinPath, isAbsolute, relative, resolve, sep } from 'node:path';
-
-/**
- * Default worker-source token budget when building a source blob directly from a
- * repo for a one-off analysis. Generous so the orchestrator's own view is rich;
- * it re-packs internally per-worker under its own tighter budget.
- */
-const DEFAULT_ANALYSIS_SOURCE_BUDGET = 40000;
 
 /** Result of turning a repo into a packed, security-ordered source blob. */
 export interface RepoSourceContext {
@@ -247,116 +216,6 @@ export function ingestRepoToSourceContext(
       stats: result.stats,
       includedUnits: packed.includedUnits.length,
       droppedUnits: packed.droppedUnits.length,
-    };
-  } finally {
-    source.cleanup();
-  }
-}
-
-/** Options for a full white-box decomposition analysis run. */
-export interface WhiteboxAnalysisOptions {
-  /** Absolute path to a LOCAL repo you own, or a GitHub HTTPS repo URL with token auth. */
-  repoPath: string;
-  /** The offensive objective — only the orchestrator model sees this. */
-  objective: string;
-  /** Max decomposition rounds. Default 5 (orchestrator's own default). */
-  maxRounds?: number;
-}
-
-/** Result of a full white-box decomposition analysis run. */
-export interface WhiteboxAnalysisResult {
-  /** Raw ingest stats (files/blocks + per-exposure counts). */
-  ingestStats: unknown;
-  /** ids of blocks detected as entry points. */
-  entryPoints: string[];
-  /** Total analysis units the ingest produced (before packing). */
-  unitCount: number;
-  /** The orchestrator's DecompositionResult. */
-  decomposition: unknown;
-}
-
-/**
- * Build the DecompositionOrchestrator config the same way scripts/decompose.mjs
- * does: an orchestrator model (opus) that holds the objective + a worker model
- * (fable-5) that answers benign analytical sub-queries. Model/provider selection
- * flows through the shared ConfigManager (env keys, fallback chain, etc.) exactly
- * like the rest of the server.
- *
- * Env overrides (optional, mirroring the CLI flags):
- *   TEMPEST_ORCHESTRATOR_PROVIDER / TEMPEST_ORCHESTRATOR_MODEL
- *   TEMPEST_WORKER_PROVIDER       / TEMPEST_WORKER_MODEL
- */
-function buildDecompositionConfig(): DecompositionConfig {
-  const orchestratorProvider =
-    (process.env.TEMPEST_ORCHESTRATOR_PROVIDER as LLMProvider) || 'openrouter';
-  const workerProvider =
-    (process.env.TEMPEST_WORKER_PROVIDER as LLMProvider) || 'openrouter';
-  const orchestratorModel = config.getLLMConfig(
-    orchestratorProvider,
-    process.env.TEMPEST_ORCHESTRATOR_MODEL || 'anthropic/claude-opus-4.8',
-  );
-  const workerModel = config.getLLMConfig(
-    workerProvider,
-    process.env.TEMPEST_WORKER_MODEL || 'anthropic/claude-fable-5',
-  );
-  return {
-    orchestratorModel,
-    workerModel,
-    maxQueriesPerRound: 8,
-    parallelWorkers: true,
-  };
-}
-
-/**
- * Full white-box analysis: ingest a LOCAL repo, build a generous security-ordered
- * source view, then run the multi-model DecompositionOrchestrator against the
- * objective. LLM-HEAVY — this may take a while (multiple orchestrator +
- * worker round-trips). Reads LOCAL source only; the only network calls are the
- * orchestrator's own LLM calls.
- *
- * @returns ingest telemetry + the orchestrator's DecompositionResult.
- */
-export async function runWhiteboxAnalysis(
-  opts: WhiteboxAnalysisOptions,
-): Promise<WhiteboxAnalysisResult> {
-  const { repoPath, objective, maxRounds } = opts;
-  const source = resolveRepoSourceForAnalysis(repoPath);
-
-  // 1) ingest source, security-rank the blocks
-  try {
-    const result = ingestRepository(createMultiLangIngestConfig(source.repoPath));
-
-    // 2) pack into a generous source view (orchestrator re-packs per-worker itself)
-    const packed = packAnalysisUnits(result.analysisUnits, DEFAULT_ANALYSIS_SOURCE_BUDGET);
-    const sourceContext = packed.text;
-
-  // Fail loud ONLY when there is genuinely NO source to analyze: 0 ingestable source files
-  // (no supported-language files, or empty repo). A valid repo that has files but no
-  // def/class/func (a module-level-only script) yields 0 blocks -> empty packed text; that
-  // used to run the orchestrator, so we do NOT regress it into a 500 — gate the throw on the
-  // file count, not on empty packed text, and let a files>0 repo proceed as before.
-    if (result.stats.files === 0) {
-      throw new Error(
-      'white-box analysis has no analyzable source: the repo has 0 ingestable source files ' +
-        '(no supported-language source, or empty). Point repoPath at a code repository.',
-      );
-    }
-
-  // 3) construct the orchestrator with a sane default config (mirrors decompose.mjs)
-    const decompConfig = buildDecompositionConfig();
-    if (typeof maxRounds === 'number' && maxRounds > 0) {
-      decompConfig.maxRounds = maxRounds;
-    }
-    const orch = new DecompositionOrchestrator(decompConfig);
-
-  // 4) run the decomposition loop (LLM calls happen HERE)
-    const decomposition = await orch.run(objective, sourceContext);
-
-    return {
-      ingestStats: result.stats,
-      entryPoints: result.entryPoints,
-      unitCount: result.analysisUnits.length,
-      decomposition,
     };
   } finally {
     source.cleanup();

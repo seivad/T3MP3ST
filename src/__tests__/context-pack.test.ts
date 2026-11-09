@@ -16,7 +16,7 @@ import {
   packContext,
   estimateTokens,
   type SourceBundle,
-} from '../orchestration/context-pack.js';
+} from '../recon/context-pack.js';
 
 describe('estimateTokens', () => {
   it('approximates chars / 4', () => {

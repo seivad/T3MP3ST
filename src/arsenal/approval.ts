@@ -1,33 +1,14 @@
 /**
- * T3MP3ST Arsenal — capability approval + spicy-action warning gate.
+ * T3MP3ST Arsenal: the capability-approval gate.
  *
- * The human-veto layer that lets an operator be trusted with live post-ex tools (metasploit, hydra,
- * sqlmap, …) safely: an intrusive/credential/dangerous tool is INERT until the tool has been approved
- * — approved once, then free for the session ("approve once, then free") — and the hottest actions
- * still fire a loud, audited WARNING every time so you always SEE what the agent is about to do.
+ * A tool with a gated risk tier (intrusive, credential, dangerous) is inert until approved: either
+ * pre-authorized for the run (`preApprovedTools`) or approved interactively once. With no approver
+ * wired, a gated tool is denied. Every gated decision is audited.
  *
- * Two ways a gated tool becomes approved:
- *   1. INTERACTIVE — the first time an operator reaches for it, `requestApproval` asks the human;
- *      a yes approves the TOOL for the rest of the session.
- *   2. PRE-AUTHORIZED — a headless / unattended run (benchmarks, pack hunts) is handed an allowlist
- *      up front (`preApprovedTools`); those run free, everything is audited, anything off-list denies.
+ * The defensive build ships no gated tool: every built-in is passive or local_read. The gate stays
+ * in Arsenal.execute() so anything gated that is ever added fails closed.
  *
- * FAIL-SAFE: a gated tool that is neither pre-approved nor interactively approvable (no approver
- * wired) is DENIED — an unattended run never silently fires an exploit because nobody was there to
- * say no.
- *
- * SCOPE (what "gated" covers): a tool is gated iff it carries a gated `riskTier`. By default that is
- * the OPT-IN specialist arsenal — the purpose-built post-ex drivers (metasploit=dangerous,
- * hydra=credential) and the Kali+ adapter tools (stamped from their catalog risk). The pre-existing
- * BUILT-IN probes (sqli_scan, password_spray, …) ship UNGATED for backward-compatibility — their
- * safety boundary is the always-on egress SCOPE gate (an out-of-scope target is refused regardless of
- * approval). An operator can extend this gate to cover the spicy built-ins too by launching with
- * T3MP3ST_GATE_BUILTINS=1, which stamps them with a riskTier. So the fail-safe above applies to every
- * tool that is gated; it does not, by itself, make the ungated built-ins inert.
- *
- * This module is PURE — no engine/server imports, no I/O. The host injects the approver + warning
- * sink via the policy, so it is fully unit-testable with fakes. Sits behind Arsenal.execute(),
- * alongside the egress scope gate.
+ * This module is pure (no I/O); the host injects the approver and sinks through the policy.
  */
 
 import type { RiskTier } from '../types/index.js';

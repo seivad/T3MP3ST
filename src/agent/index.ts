@@ -177,39 +177,6 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
       { role: 'user', content: this.buildTaskPrompt(task, target, toolDefs, sourceContext, sharedContext) },
     ];
 
-    const bootstrapCall = this.getLocalReconBootstrap(task, target, toolDefs);
-    if (bootstrapCall) {
-      const toolStep = await this.executeTool(bootstrapCall, target, -1);
-      steps.push(toolStep);
-      seenCalls.set(
-        `${bootstrapCall.name}:${JSON.stringify(bootstrapCall.arguments || {})}`,
-        String(toolStep.toolResult?.output || toolStep.toolResult?.error || 'no output').replace(/\s+/g, ' ').slice(0, 160)
-      );
-
-      if (toolStep.toolResult?.findings) {
-        const out = String(toolStep.toolResult.output ?? '').slice(0, 4000);
-        for (const tf of toolStep.toolResult.findings) {
-          allFindings.push({ ...tf, provenance: 'tool', toolName: bootstrapCall.name, toolOutput: out || tf.details });
-        }
-      }
-
-      messages.push({
-        role: 'assistant',
-        content: 'Running an initial low-noise recon check before planning deeper actions.',
-        toolCalls: [bootstrapCall],
-      });
-      messages.push({
-        role: 'tool',
-        content: this.formatToolResult(toolStep.toolResult),
-        toolCallId: bootstrapCall.id,
-        name: bootstrapCall.name,
-      });
-      messages.push({
-        role: 'user',
-        content: 'Use the bootstrap observation above as your first tool observation. Continue through the normal ACTION CONTRACT: request another listed tool only if it will materially improve the evidence; otherwise provide the final recon debrief.',
-      });
-    }
-
     for (let i = 0; i < this.options.maxIterations; i++) {
       try {
         // Ask the LLM what to do next
@@ -409,38 +376,6 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     return result;
   }
 
-  private getLocalReconBootstrap(
-    task: Task,
-    target: Target | undefined,
-    tools: LLMToolDefinition[]
-  ): LLMToolCall | undefined {
-    if (this.llm.getProvider() !== 'local-agent') return undefined;
-    if (!target?.address) return undefined;
-    if (task.phase !== 'reconnaissance' && task.operatorType !== 'recon') return undefined;
-
-    const hasTool = (name: string) => tools.some((tool) => tool.name === name);
-    const taskName = task.name.toLowerCase();
-    const id = `local-agent-bootstrap-${Date.now()}`;
-
-    if (taskName.includes('dns') && hasTool('dns_lookup')) {
-      return { id, name: 'dns_lookup', arguments: { domain: target.address, type: 'A' } };
-    }
-
-    if (taskName.includes('port') && hasTool('port_scan')) {
-      return { id, name: 'port_scan', arguments: { target: target.address, ports: '80,443', timeout: 2000 } };
-    }
-
-    if ((taskName.includes('web') || taskName.includes('fingerprint')) && hasTool('header_analysis')) {
-      return { id, name: 'header_analysis', arguments: { url: `https://${target.address}` } };
-    }
-
-    if ((taskName.includes('content') || taskName.includes('discover')) && hasTool('robots_txt_fetch')) {
-      return { id, name: 'robots_txt_fetch', arguments: { url: `https://${target.address}` } };
-    }
-
-    return undefined;
-  }
-
   /**
    * Execute a single tool call via the Arsenal
    */
@@ -520,16 +455,13 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
     // can ground findings in code rather than probing blind.
     if (sourceContext && sourceContext.trim().length > 0) {
       parts.push(`\n### White-box source (security-prioritized excerpt)`);
-      parts.push(`The following is a security-prioritized excerpt of the target's own source code. Use it to locate and confirm vulnerabilities against the actual implementation — but only report a finding as verified when a tool result backs it.`);
+      parts.push(`The following is a security-prioritized excerpt of the operator's own source code. Use it to locate and confirm weaknesses against the actual implementation, and read the files with your tools before reporting.`);
       parts.push(sourceContext);
     }
 
-    // Shared intel from the pack board (Phase-2 coordination): what sibling operators have already
-    // found/claimed on this mission. Lets this operator build on tool-verified leads and NOT re-tread
-    // surface a teammate already owns. Absent/empty keeps the solo-operator prompt (the baseline).
+    // Context the engine hands forward from earlier steps (for the Analyst: the scanners' candidates).
     if (sharedContext && sharedContext.trim().length > 0) {
-      parts.push(`\n### Shared intel from the pack (your teammates' live board)`);
-      parts.push(`Other operators are working this same target in parallel. Below is the current lead-board — tool-verified leads, who has claimed what, and open surface. Build on verified leads, do not duplicate a teammate's claimed work, and chase the hottest UNCLAIMED lead that fits your role.`);
+      parts.push(`\n### Context from earlier steps of this assessment`);
       parts.push(sharedContext);
     }
 
@@ -563,13 +495,6 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
         parts.push(`Use this intel to prioritize your testing.`);
       }
 
-      // Prior credential intel
-      if (target.credentials?.length) {
-        parts.push(`\n**Harvested Credentials** (from prior phases):`);
-        for (const cred of target.credentials.slice(0, 5)) {
-          parts.push(`  - ${cred.username || 'unknown'}:*** (${cred.type}) via ${cred.source}`);
-        }
-      }
     }
 
     if (tools?.length) {
@@ -664,7 +589,9 @@ export class AgentLoop extends EventEmitter<AgentEvents> {
           details: String(f.details ?? f.evidence ?? f.evidence_ref ?? '').slice(0, 4000),
           cvss: typeof f.cvss === 'number' ? f.cvss : undefined,
           cve: Array.isArray(f.cve) ? f.cve.map(String) : undefined,
+          cwe: Array.isArray(f.cwe) ? f.cwe.map(String) : undefined,
           remediation: f.remediation ? String(f.remediation) : undefined,
+          retest: f.retest ? String(f.retest).slice(0, 1000) : undefined,
           // Model-asserted in the debrief — NO tool provenance. The gate downgrades these.
           provenance: 'model' as const,
         }));

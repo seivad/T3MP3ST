@@ -43,7 +43,7 @@ import {
   estimateTokens,
   type SourceFile,
   type SourceBundle,
-} from '../orchestration/context-pack.js';
+} from './context-pack.js';
 import { redactString } from '../redact.js';
 
 // =============================================================================

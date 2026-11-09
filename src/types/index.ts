@@ -6,7 +6,7 @@
 // LLM CONFIGURATION
 // =============================================================================
 
-export type LLMProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'codex' | 'mock' | 'local' | 'local-agent';
+export type LLMProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'mock' | 'local';
 
 export interface LLMConfig {
   provider: LLMProvider;
@@ -26,13 +26,10 @@ export interface LLMConfig {
    * Ordered model/provider ladder to fall back to when the PRIMARY model fails for
    * ANY reason it can't self-recover from — hard errors after same-model retries
    * (rate-limit, 5xx, timeout, auth, unavailable model, context-length) AND soft
-   * failures (a refusal, or an empty/contentless 200). Empty/unset = no fallback.
+   * failures (an empty/contentless 200). Empty/unset = no fallback.
    * Each entry overrides the primary config's matching fields.
    *
-   * On a *refusal* specifically, the operation's REAL authorization context (scope
-   * + human-approved gate + responsible disclosure) is restated before the next
-   * model is tried — honest escalation, NO jailbreak / guardrail-bypass prompts.
-   * A refusal that survives honest context + a model swap is respected.
+   * A *refusal* is never a fallback trigger: it is returned to the caller as-is.
    */
   fallbackChain?: FallbackEntry[];
 }
@@ -108,13 +105,13 @@ export interface LLMToolCall {
 // OPERATOR TYPES
 // =============================================================================
 
+/**
+ * The defensive profile's operators. The upstream Exploiter, Infiltrator, Exfiltrator and Ghost
+ * archetypes are not part of this build.
+ */
 export type OperatorArchetype =
   | 'recon'
   | 'scanner'
-  | 'exploiter'
-  | 'infiltrator'
-  | 'exfiltrator'
-  | 'ghost'
   | 'coordinator'
   | 'analyst';
 
@@ -122,9 +119,7 @@ export type OperatorStatus =
   | 'idle'
   | 'tasked'
   | 'executing'
-  | 'cooldown'
-  | 'burned'
-  | 'exfiltrated';
+  | 'cooldown';
 
 export interface OperatorState {
   status: OperatorStatus;
@@ -185,10 +180,7 @@ export type TargetZone =
 export type TargetStatus =
   | 'discovered'
   | 'scanning'
-  | 'vulnerable'
-  | 'exploited'
-  | 'owned'
-  | 'exfiltrated';
+  | 'vulnerable';
 
 export interface Target {
   id: string;
@@ -354,22 +346,10 @@ export interface TaskResult {
 }
 
 // =============================================================================
-// OPSEC TYPES
+// DEFENSIVE-CONTROL OBSERVATIONS
 // =============================================================================
 
-export type OpsecLevel = 'silent' | 'covert' | 'loud';
-
-export interface OpsecConfig {
-  level: OpsecLevel;
-  maxDetectionEvents: number;
-  cooldownAfterDetection: number;
-  cleanupOnComplete: boolean;
-  avoidDetection: boolean;
-  jitterRange: [number, number];
-  trafficBlending: boolean;
-  loggingSanitization: boolean;
-}
-
+/** A defensive control the target showed (a WAF block, a rate limit), recorded as a finding input. */
 export interface DetectionEvent {
   id: string;
   type: 'waf' | 'ids' | 'edr' | 'siem' | 'honeypot' | 'manual' | 'unknown';
@@ -485,6 +465,8 @@ cvss?: number;
 cve?: string[];
 cwe?: string[];
 remediation?: string;
+/** The check that proves the fix worked. */
+retest?: string;
 /** Optional machine evidence attached at the tool boundary (e.g. browser screenshots). */
 evidence?: { type: 'screenshot' | 'output' | 'request' | 'response'; content: string; timestamp: number; metadata?: Record<string, unknown> }[];
   /**
@@ -515,7 +497,6 @@ export interface ToolResult {
 export interface TempestConfig {
   name: string;
   llm: LLMConfig;
-  opsec?: Partial<OpsecConfig>;
   operators?: {
     maxConcurrent?: number;
     defaultConfig?: Partial<OperatorConfig>;

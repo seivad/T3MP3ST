@@ -9,7 +9,7 @@ import Conf from 'conf';
 import { homedir } from 'os';
 import { isAbsolute, join } from 'path';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
-import type { LLMProvider, LLMConfig, FallbackEntry, OpsecLevel } from '../types/index.js';
+import type { LLMProvider, LLMConfig, FallbackEntry } from '../types/index.js';
 
 type ApiKeyProvider = 'openrouter' | 'venice' | 'anthropic' | 'openai' | 'xai' | 'gemini' | 'litellm' | 'deepseek' | 'huggingface' | 'nanogpt' | 'novita' | 'local';
 
@@ -106,23 +106,10 @@ export interface TempestSettings {
     defaultModel: string;
   };
 
-  // Codex CLI/account subscription backend
-  codex: {
-    command: string;
-    defaultModel: string;
-  };
-
   // General settings
   maxTokens: number;
   temperature: number;
   timeout: number;
-
-  // OPSEC defaults
-  opsec: {
-    level: OpsecLevel;
-    maxDetectionEvents: number;
-    cleanupOnComplete: boolean;
-  };
 
   // UI preferences
   ui: {
@@ -131,9 +118,6 @@ export interface TempestSettings {
     verboseLogging: boolean;
   };
 
-  // Outbound SOCKS5 proxy for test/attack traffic (socks5://[user:pass@]host:port).
-  // Empty/unset = egress from the operator's own IP. See src/net/proxy.ts.
-  proxyUrl?: string;
 }
 
 // =============================================================================
@@ -215,20 +199,9 @@ const DEFAULT_SETTINGS: TempestSettings = {
     defaultModel: 'zai-org/glm-5.2',
   },
 
-  codex: {
-    command: 'codex',
-    defaultModel: 'codex-default',
-  },
-
   maxTokens: 4096,
   temperature: 0.7,
   timeout: 60000,
-
-  opsec: {
-    level: 'covert',
-    maxDetectionEvents: 3,
-    cleanupOnComplete: true,
-  },
 
   ui: {
     showBanner: true,
@@ -236,7 +209,6 @@ const DEFAULT_SETTINGS: TempestSettings = {
     verboseLogging: false,
   },
 
-  proxyUrl: '',
 };
 
 export function migrateLegacyDeepSeekSettings(
@@ -504,16 +476,6 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       capabilities: ['reasoning', 'code', 'analysis', 'vision', 'tools'],
     },
   ],
-  codex: [
-    {
-      id: 'codex-default',
-      name: 'Codex Account Default',
-      provider: 'Codex',
-      contextWindow: 200000,
-      maxOutput: 8192,
-      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'local-cli'],
-    },
-  ],
   mock: [
     {
       id: 'mock-model',
@@ -669,50 +631,6 @@ export const AVAILABLE_MODELS: Record<LLMProvider, ModelInfo[]> = {
       capabilities: ['reasoning', 'code', 'tools'],
     },
   ],
-  'local-agent': [
-    // Connected local agent CLIs used AS the LLM backend — no API key (each uses its own login).
-    // The chosen agent id (codex|claude|hermes|opencode|omp) travels in the `model` field.
-    {
-      id: 'codex',
-      name: 'Codex (local CLI)',
-      provider: 'LocalAgent',
-      contextWindow: 200000,
-      maxOutput: 8192,
-      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'local-cli'],
-    },
-    {
-      id: 'claude',
-      name: 'Claude Code (local CLI)',
-      provider: 'LocalAgent',
-      contextWindow: 200000,
-      maxOutput: 8192,
-      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'local-cli'],
-    },
-    {
-      id: 'hermes',
-      name: 'Hermes (local CLI)',
-      provider: 'LocalAgent',
-      contextWindow: 32000,
-      maxOutput: 8192,
-      capabilities: ['reasoning', 'code', 'agents', 'local-cli'],
-    },
-    {
-      id: 'opencode',
-      name: 'OpenCode (local CLI)',
-      provider: 'LocalAgent',
-      contextWindow: 200000,
-      maxOutput: 8192,
-      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'local-cli'],
-    },
-    {
-      id: 'omp',
-      name: 'Oh My Pi (local CLI)',
-      provider: 'LocalAgent',
-      contextWindow: 200000,
-      maxOutput: 8192,
-      capabilities: ['reasoning', 'code', 'analysis', 'agents', 'local-cli'],
-    },
-  ],
 };
 
 // =============================================================================
@@ -835,21 +753,6 @@ class ConfigManager {
   }
 
   /**
-   * Outbound SOCKS5 proxy URL for test/attack traffic. Env TEMPEST_PROXY_URL wins over
-   * the saved value; returns '' when egress should leave from the operator's own IP.
-   */
-  getProxyUrl(): string {
-    const env = process.env.TEMPEST_PROXY_URL?.trim();
-    if (env) return env;
-    return (this.config.get('proxyUrl') || '').trim();
-  }
-
-  /** Persist the proxy URL (pass '' to clear). Does NOT install it — see net/proxy. */
-  setProxyUrl(url: string): void {
-    this.config.set('proxyUrl', (url || '').trim());
-  }
-
-  /**
    * Get an API key for a provider
    */
   getApiKey(provider: ApiKeyProvider): string | undefined {
@@ -943,9 +846,6 @@ class ConfigManager {
     if (this.hasApiKey('nanogpt')) providers.push('nanogpt');
     if (this.hasApiKey('novita')) providers.push('novita');
 
-    // Codex uses the local Codex CLI/account auth instead of API-key storage.
-    providers.push('codex');
-
     // Mock and local are always available
     providers.push('mock', 'local');
 
@@ -1032,16 +932,6 @@ class ConfigManager {
         apiKey = this.getApiKey('novita');
         baseUrl = this.config.get('novita').baseUrl;
         actualModel = model || this.config.get('novita').defaultModel;
-        break;
-      case 'codex':
-        actualModel = model || this.config.get('codex').defaultModel;
-        break;
-      case 'local-agent':
-        // Keyless backbone: the mission is routed through a connected local CLI agent
-        // (Claude Code / Codex / Hermes / OpenCode / Oh My Pi), each using its own login — no API key or base
-        // URL. The chosen agent id travels in `model`, optionally with the selected
-        // underlying model after "::" (for example "claude::opus").
-        actualModel = model || 'claude';
         break;
       case 'mock':
         actualModel = 'mock-model';
@@ -1161,9 +1051,6 @@ class ConfigManager {
       case 'litellm':
         this.config.set('defaultModel', this.config.get('litellm').defaultModel);
         break;
-      case 'codex':
-        this.config.set('defaultModel', this.config.get('codex').defaultModel);
-        break;
       case 'local':
         this.config.set('defaultModel', process.env.TEMPEST_LOCAL_MODEL?.trim() || 'llama3');
         break;
@@ -1204,9 +1091,6 @@ class ConfigManager {
         break;
       case 'litellm':
         this.config.set('litellm', { ...this.config.get('litellm'), defaultModel: model });
-        break;
-      case 'codex':
-        this.config.set('codex', { ...this.config.get('codex'), defaultModel: model });
         break;
     }
 
