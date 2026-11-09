@@ -36,6 +36,8 @@ function defaultExecutive(findings: DefensiveFinding[]): string {
 
 /** A draft advisory for the owner's security contact. The assessor never sends it. */
 export function disclosureDraft(report: Pick<AssessmentReport, 'targets' | 'findings' | 'generatedAt'>): string | undefined {
+  // A disclosure about a site whose ownership is not verified is not ours to draft.
+  if (report.targets.site?.verification === 'unverified') return undefined;
   const serious = report.findings.filter((f) => f.severity === 'critical' || f.severity === 'high');
   if (serious.length === 0) return undefined;
   const target = report.targets.site?.url ?? report.targets.repo?.url ?? 'the assessed system';

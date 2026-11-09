@@ -169,6 +169,11 @@ describe('operator triage and the report', () => {
     expect(report.disclosureDraft).toContain('never sends it');
     expect(renderMarkdown(report)).toContain('## Harden with Cloudflare');
   });
+
+  it('offers no disclosure draft for a site whose ownership is unverified', () => {
+    const report = buildReport({ id: 'r2', findings: scanSecretsBuiltin(repo), targets: { site: { url: 'https://shop.acme.io/', verification: 'unverified' } }, coverage: [], engineVersion: 'test' });
+    expect(report.disclosureDraft).toBeUndefined();
+  });
 });
 
 describe('HTTP API', () => {
