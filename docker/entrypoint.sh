@@ -27,4 +27,5 @@ fi
 
 mkdir -p "${T3MP3ST_WORK_ROOT:-/work}"
 chown node:node "${T3MP3ST_WORK_ROOT:-/work}"
+export HOME=/home/node USER=node
 exec setpriv --reuid=node --regid=node --init-groups --no-new-privs -- node /opt/t3mp3st/dist/server.js
