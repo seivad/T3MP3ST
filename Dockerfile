@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-#
 # T3MP3ST defensive profile: the assessment API (port 3333) with git, gitleaks and osv-scanner.
 # No exploitation or scanning tools are installed, and nothing needs raw sockets.
 #

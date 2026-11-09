@@ -52,7 +52,9 @@ export async function fetchPage(url: string, fetchImpl: typeof fetch = fetch, si
     await reader.cancel().catch(() => undefined);
   }
   const cookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
-  return { requestedUrl: url, finalUrl: response.url || url, status: response.status, headers: response.headers, cookies, body };
+  // In the sandbox the Worker follows redirects itself and names the final URL in a header.
+  const finalUrl = response.headers.get('x-assessor-final-url') || response.url || url;
+  return { requestedUrl: url, finalUrl, status: response.status, headers: response.headers, cookies, body };
 }
 
 function finding(
