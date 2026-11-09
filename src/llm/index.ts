@@ -847,7 +847,6 @@ class MockAdapter implements LLMProviderAdapter {
     const mockResponses: Record<string, string> = {
       recon: 'Reconnaissance complete. Identified 5 subdomains, 3 open ports, and 2 potential entry points.',
       scan: 'Vulnerability scan complete. Found 2 high-severity, 5 medium-severity vulnerabilities.',
-      exploit: 'Exploitation attempt successful. Gained initial foothold via SQL injection.',
       default: `Mock response to: ${lastMessage.content.substring(0, 50)}...`,
     };
 
@@ -858,8 +857,6 @@ class MockAdapter implements LLMProviderAdapter {
       response = mockResponses.recon;
     } else if (content.includes('scan') || content.includes('vulnerability')) {
       response = mockResponses.scan;
-    } else if (content.includes('exploit')) {
-      response = mockResponses.exploit;
     }
 
     return {
@@ -995,21 +992,27 @@ class LocalAdapter implements LLMProviderAdapter {
   // understand role:'tool', and re-emitting a prior ```json``` block would get
   // re-parsed as a fresh live call (defeats termination). Its TEXT reply is parsed
   // back into tool calls after the round-trip.
-  private buildMessages(messages: LLMMessage[], options?: ChatOptions): { role: string; content: string }[] {
+  // With native tools on the OpenAI wire, prior tool requests and results keep their native shape
+  // (assistant tool_calls, role:'tool' with tool_call_id), which function-calling models expect.
+  private buildMessages(messages: LLMMessage[], options?: ChatOptions, native = false): Record<string, unknown>[] {
     const contract = renderToolContract(options?.tools);
-    const preamble = 'You are the planning brain for T3MP3ST, an authorized offensive-security harness.'
+    const preamble = 'You are the analysis engine for T3MP3ST, a defensive security assessment of systems the operator owns.'
       + (contract
-        ? ' You drive a ReAct loop: REQUEST tools, the harness runs them and returns results, you reason until the surface is exhausted.' + contract
+        ? ' You drive a ReAct loop: REQUEST tools, the harness runs them and returns results, you reason until the task is complete.' + contract
         : ' Operate in planning and analysis mode; when JSON is requested, return ONLY the requested block — no preamble.');
     const systemParts = [preamble];
-    const out: { role: string; content: string }[] = [];
+    const out: Record<string, unknown>[] = [];
     for (const m of messages) {
       if (m.role === 'system') {
         if (m.content.trim()) systemParts.push(m.content);
       } else if (m.role === 'assistant' && m.toolCalls?.length) {
-        out.push({ role: 'assistant', content: `[requested tools: ${m.toolCalls.map(t => t.name).join(', ')}]` });
+        out.push(native
+          ? { role: 'assistant', content: m.content || '', tool_calls: m.toolCalls.map(t => ({ id: t.id, type: 'function', function: { name: t.name, arguments: JSON.stringify(t.arguments ?? {}) } })) }
+          : { role: 'assistant', content: `[requested tools: ${m.toolCalls.map(t => t.name).join(', ')}]` });
       } else if (m.role === 'tool') {
-        out.push({ role: 'user', content: `TOOL RESULT (${m.name || 'tool'}):\n${m.content}` });
+        out.push(native && m.toolCallId
+          ? { role: 'tool', tool_call_id: m.toolCallId, content: m.content }
+          : { role: 'user', content: `TOOL RESULT (${m.name || 'tool'}):\n${m.content}` });
       } else {
         out.push({ role: m.role, content: m.content });
       }
@@ -1021,7 +1024,6 @@ class LocalAdapter implements LLMProviderAdapter {
     const baseUrl = (this.config.baseUrl || 'http://localhost:11434/api').replace(/\/$/, '');
     const openaiWire = this.isOpenAIWire(baseUrl);
     const url = `${baseUrl}/${openaiWire ? 'chat/completions' : 'chat'}`;
-    const wireMessages = this.buildMessages(messages, options);
     const maxTokens = options?.maxTokens || this.config.maxTokens || 4096;
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
 
@@ -1032,6 +1034,7 @@ class LocalAdapter implements LLMProviderAdapter {
     // and we parse those instead of the text; the probe result is cached
     // per-model so subsequent calls skip the probe overhead.
     const tryNative = this.shouldTryNativeTools() && !!options?.tools?.length;
+    const wireMessages = this.buildMessages(messages, options, openaiWire && tryNative);
 
     const requestBody: Record<string, unknown> = openaiWire
       ? { model: this.config.model, messages: wireMessages, max_tokens: maxTokens, temperature, stream: false }
@@ -1075,6 +1078,7 @@ class LocalAdapter implements LLMProviderAdapter {
       // explicit rejection; an optimistic probe must not break text fallback.
       if (!response.ok && tryNative && this.config.nativeTools !== true) {
         delete requestBody.tools;
+        requestBody.messages = this.buildMessages(messages, options, false);
         this.cacheProbeResult(false);
         response = await fetch(url, {
           method: 'POST',
@@ -1193,7 +1197,7 @@ function renderToolContract(tools?: LLMToolDefinition[]): string {
     '{"tool_calls":[{"name":"<tool>","arguments":{ ... }}]}',
     '```',
     '  The harness runs them (scope-gated) and returns the results as new messages; then you reason again.',
-    '• When the attack surface is exhausted and you are DONE, reply with your final debrief in prose (NO json block).',
+    '• When the task is complete, reply with your final debrief. It may end with the findings JSON block your task asks for; that block is not a tool request.',
     '• Never run these tools yourself — REQUEST them. Requesting is how you act.',
   );
   return lines.join('\n');

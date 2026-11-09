@@ -29,13 +29,13 @@ import { redactSecrets, redactString } from '../redact.js';
 import type { OperatorArchetype, Task } from '../types/index.js';
 import { scanDependencies } from './deps.js';
 import { scanConfig } from './iac.js';
-import { buildReport, renderMarkdown } from './report.js';
+import { buildReport, renderMarkdown, sortFindings } from './report.js';
 import { cloneRepository } from './repo.js';
 import { scanCode } from './sast.js';
 import { findingId } from './scan-util.js';
 import { scanSecrets } from './secrets.js';
 import type { AssessmentEvent, AssessmentEventType, AssessmentReport, AssessmentRequest, AssessmentStatus, DefensiveFinding, Severity } from './types.js';
-import { runPassivePosture } from './web.js';
+import { registrableDomain, runPassivePosture } from './web.js';
 
 export const ENGINE_VERSION = '1.0.0-defensive';
 
@@ -282,7 +282,8 @@ export async function runAssessment(run: Assessment, options: EngineOptions): Pr
     arsenal.setApprovalController(new ApprovalController({}));
     if (req.site) {
       const host = new URL(req.site.url).hostname;
-      arsenal.setScope({ allowedHosts: [host], allowLoopback: !!options.allowLocalTargets, allowPrivate: !!options.allowLocalTargets });
+      // The site, and its registrable domain for the CAA/SPF/DMARC and registration lookups.
+      arsenal.setScope({ allowedHosts: [host, registrableDomain(host)], allowLoopback: !!options.allowLocalTargets, allowPrivate: !!options.allowLocalTargets });
       phase('posture', `Passive posture checks of ${req.site.url} (ownership: ${req.site.verification})`);
       const posture = await runPassivePosture(req.site.url, {
         arsenal,
@@ -356,7 +357,7 @@ export async function runAssessment(run: Assessment, options: EngineOptions): Pr
 
         phase('summary', 'Coordinator writes the executive summary');
         const coordinator = createOperator('Aegis', 'coordinator', llm);
-        const digest = findings
+        const digest = sortFindings(findings)
           .filter((f) => f.severity !== 'info')
           .slice(0, 40)
           .map((f) => `- [${f.severity}] ${f.title} (${f.confidence}) | fix: ${f.remediation.slice(0, 160)}`)
