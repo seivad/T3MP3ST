@@ -4,14 +4,14 @@
 #   docker build --platform linux/amd64 -t t3mp3st-defensive .
 #   docker run --rm -e ASSESSOR_API_TOKEN=$(openssl rand -hex 32) -p 127.0.0.1:3333:3333 t3mp3st-defensive
 
-FROM node:24.22.2-trixie-slim@sha256:0820eaa85e07d0490446dd01d14707e17e6108a36988cf374899cd057eb3812d AS build
+FROM node:22.21.1-bookworm-slim@sha256:25b3eb23a00590b7499f2a2ce939322727fcce1b15fdd69754fcd09536a3ae2c AS build
 WORKDIR /src
 COPY package.json package-lock.json tsconfig.json tsconfig.build.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 COPY src ./src
 RUN npm run build && npm prune --omit=dev --ignore-scripts
 
-FROM node:24.22.2-trixie-slim@sha256:0820eaa85e07d0490446dd01d14707e17e6108a36988cf374899cd057eb3812d
+FROM node:22.21.1-bookworm-slim@sha256:25b3eb23a00590b7499f2a2ce939322727fcce1b15fdd69754fcd09536a3ae2c
 
 ARG TARGETARCH
 ARG GITLEAKS_VERSION=8.30.1
